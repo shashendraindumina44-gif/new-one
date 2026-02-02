@@ -3,6 +3,7 @@ const axios = require('axios');
 const cors = require('cors');
 
 const app = express();
+// Koyeb වැනි සේවාවන් සඳහා PORT එක dynamic විය යුතුය
 const port = process.env.PORT || 3000;
 
 app.use(cors());
@@ -52,7 +53,6 @@ function extractVideoId(url) {
     return match ? match[1] : null;
 }
 
-// Fallback logic for Y2Mate/Savenow
 async function callY2MateApi(path, params) {
     let lastError;
     for (const domain of CONFIG.Y2MATE.ENDPOINTS) {
@@ -83,14 +83,13 @@ async function refreshYtmp3Session() {
             activeSession.auth = e.length > 32 ? e.substring(0, 32) : e;
             activeSession.param = String.fromCharCode(json[6]);
             activeSession.lastUpdate = Date.now();
-            console.log("YTMP3 Session Refreshed:", activeSession.auth);
         }
     } catch (e) {
         console.error("Session Refresh Failed:", e.message);
     }
 }
 
-// --- Provider 1: Cnv.cx (Engine: Alpha, Speed: 10/10) ---
+// --- Providers (Cnv.cx, Y2Down, YTMP3.as, YtMp3.gg) ---
 async function cnvConvert(videoId) {
     try {
         const url = `https://www.youtube.com/watch?v=${videoId}`;
@@ -103,45 +102,29 @@ async function cnvConvert(videoId) {
     } catch (e) { return null; }
 }
 
-// --- Provider 4: Y2Down (Engine: Loader.to/Savenow, Speed: 6/10) ---
 async function y2DownConvert(videoId, format = 'mp3') {
     try {
         const targetUrl = `https://www.youtube.com/watch?v=${videoId}`;
-
-        // Init via fallback helper
-        const init = await callY2MateApi('/ajax/download.php', {
-            copyright: 0,
-            format: format,
-            url: targetUrl
-        });
-
+        const init = await callY2MateApi('/ajax/download.php', { copyright: 0, format: format, url: targetUrl });
         if (!init || !init.id) return null;
-
-        // Poll via fallback helper
         for (let i = 0; i < 30; i++) {
             const prog = await callY2MateApi('/api/progress', { id: init.id });
             if ((prog.success == 1 || prog.text === 'Finished') && prog.download_url) return prog.download_url;
             if (prog.text === 'Error') return null;
             await new Promise(r => setTimeout(r, 2000));
         }
-    } catch (e) {
-        console.error("Y2Down Error:", e.message);
-        return null;
-    }
+    } catch (e) { return null; }
     return null;
 }
 
-// --- Provider 2: YTMP3.as (Engine: Cloud, Speed: 7/10) ---
 async function ytmp3asConvert(videoId) {
     try {
         await refreshYtmp3Session();
         const ts = Math.floor(Date.now() / 1000);
         const { data: init } = await axios.get(`${CONFIG.YTMP3_AS.INIT}?${activeSession.param}=${activeSession.auth}&t=${ts}`, { headers: CONFIG.YTMP3_AS.HEADERS, timeout: 6000 });
         if (!init || init.error) return null;
-
         const { data: conv } = await axios.get(`${init.convertURL}&v=${videoId}&f=mp3&t=${ts}`, { headers: CONFIG.YTMP3_AS.HEADERS, timeout: 8000 });
         if (!conv || conv.error) return null;
-
         if (conv.progressURL) {
             for (let i = 0; i < 20; i++) {
                 const { data: st } = await axios.get(`${conv.progressURL}&t=${Math.floor(Date.now() / 1000)}`, { headers: CONFIG.YTMP3_AS.HEADERS, timeout: 5000 });
@@ -154,7 +137,6 @@ async function ytmp3asConvert(videoId) {
     } catch (e) { return null; }
 }
 
-// --- Provider 3: YtMp3.gg (Engine: Scraper, Speed: 8/10) ---
 async function ytmp3ggConvert(videoId) {
     try {
         const { data: conv } = await axios.post('https://ytmp3.gg/api/converter',
@@ -165,156 +147,32 @@ async function ytmp3ggConvert(videoId) {
     } catch (e) { return null; }
 }
 
-// --- API Router ---
-
-app.get('/', (req, res) => {
-    res.setHeader('Content-Type', 'text/html');
-    res.send(`<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Antigravity Elite Hybrid API</title>
-    <style>
-        body { font-family: 'Inter', system-ui, sans-serif; background: #08101b; color: #f1f5f9; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; }
-        .container { background: #111a2e; padding: 3rem; border-radius: 2rem; box-shadow: 0 35px 60px -15px rgba(0,0,0,0.9); width: 100%; max-width: 680px; border: 1px solid #1e293b; position: relative; overflow: hidden; }
-        .container::before { content: ''; position: absolute; top: -50%; left: -50%; width: 200%; height: 200%; background: radial-gradient(circle, rgba(56,189,248,0.08) 0%, transparent 70%); pointer-events: none; }
-        h1 { margin: 0 0 1.5rem; font-size: 2.25rem; color: #38bdf8; text-align: center; font-weight: 900; letter-spacing: -0.05em; }
-        .badge { display: inline-block; background: #075985; color: #bae6fd; font-size: 0.75rem; padding: 0.4rem 1rem; border-radius: 9999px; font-weight: 800; margin-bottom: 2rem; text-transform: uppercase; letter-spacing: 0.1em; }
-        .section-title { font-size: 0.85rem; color: #64748b; font-weight: 800; margin: 2rem 0 1rem; text-transform: uppercase; letter-spacing: 0.12em; border-bottom: 1px solid #1e293b; padding-bottom: 0.5rem; }
-        .endpoint { background: #0f172a; padding: 1.5rem; border-radius: 1.25rem; border: 1px solid #334155; margin-bottom: 1.25rem; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
-        .endpoint:hover { transform: translateY(-4px); border-color: #38bdf8; box-shadow: 0 10px 20px -5px rgba(56,189,248,0.2); }
-        code { color: #f472b6; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.95rem; word-break: break-all; }
-        .desc { color: #94a3b8; font-size: 0.85rem; margin-top: 1rem; line-height: 1.7; }
-        .providers { display: flex; gap: 0.75rem; margin-top: 2.5rem; justify-content: center; align-items: center; }
-        .dot { width: 10px; height: 10px; background: #10b981; border-radius: 50%; box-shadow: 0 0 15px #10b981; }
-        .status-text { font-size: 0.8rem; color: #10b981; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; }
-        span.method { color: #10b981; font-weight: 900; margin-right: 8px; }
-        .grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <center><div class="badge">V8.0 TURBO HYBRID CORE</div></center>
-        <h1>Antigravity Elite API</h1>
-        
-        <div class="section-title">Ultra High-Speed Endpoints</div>
-        <div class="grid">
-            <div class="endpoint">
-                <code><span class="method">GET</span>/api/song?url={YT_URL}</code>
-                <div class="desc">Engine: Hybrid Turbo. Instant extraction with redundant high-speed conversion nodes.</div>
-            </div>
-
-            <div class="endpoint">
-                <code><span class="method">GET</span>/api/mp3?url={YT_URL}</code>
-                <div class="desc">Integrated Speed Chain. Direct 320kbps delivery with zero-wait conversion technology.</div>
-            </div>
-
-            <div class="endpoint">
-                <code><span class="method">GET</span>/api/ytmp3?url={YT_URL}</code>
-                <div class="desc">Y2 Turbo Optimized. Redesigned for maximum speed using high-speed provider bypass.</div>
-            </div>
-        </div>
-
-        <div class="section-title">Video Endpoints</div>
-        <div class="grid">
-            <div class="endpoint">
-                <code><span class="method">GET</span>/api/ytmp4?url={YT_URL}</code>
-                <div class="desc">Fast-Stream MP4. Returns optimized 360p video for instant playback.</div>
-            </div>
-        </div>
-
-        <div class="providers">
-            <div class="dot"></div>
-            <span class="status-text">All Global Clusters: Synchronized & Online</span>
-        </div>
-    </div>
-</body>
-</html>`);
-});
-
-// Helper for Hybrid MP3 Speed
+// --- Hybrid Speed Core ---
 async function getHybridMp3(videoId) {
-    console.log(`[TURBO-CORE] High-Speed Chain: ${videoId}`);
-
-    // 1. Cnv.cx (King of Speed)
-    try {
-        const link = await cnvConvert(videoId);
-        if (link) return link;
-    } catch (e) { }
-
-    // 2. YtMp3.gg (High reliability + Speed)
-    try {
-        const link = await ytmp3ggConvert(videoId);
-        if (link) return link;
-    } catch (e) { }
-
-    // 3. YTMP3.as (Cloud Engine)
-    try {
-        const link = await ytmp3asConvert(videoId);
-        if (link) return link;
-    } catch (e) { }
-
-    // 4. Fallback: Y2Down (Slow Polling)
-    try {
-        const link = await y2DownConvert(videoId, 'mp3');
-        if (link) return link;
-    } catch (e) { }
-
-    return null;
+    const link = await cnvConvert(videoId) || await ytmp3ggConvert(videoId) || await ytmp3asConvert(videoId) || await y2DownConvert(videoId, 'mp3');
+    return link;
 }
+
+// --- Endpoints ---
+app.get('/', (req, res) => {
+    res.send(`<h1>Antigravity API is Running</h1><p>Use /api/song?url=YOUR_URL</p>`);
+});
 
 app.get('/api/song', async (req, res) => {
     const videoId = extractVideoId(req.query.url);
-    if (!videoId) return res.status(400).send("Invalid YouTube URL");
+    if (!videoId) return res.status(400).send("Invalid URL");
     const link = await getHybridMp3(videoId);
-    if (link) return res.redirect(link);
-    res.status(500).send("Engine busy.");
-});
-
-app.get('/api/mp3', async (req, res) => {
-    const videoId = extractVideoId(req.query.url);
-    if (!videoId) return res.status(400).send("Invalid YouTube URL");
-    const link = await getHybridMp3(videoId);
-    if (link) return res.redirect(link);
-    res.status(500).send("Engines busy.");
-});
-
-app.get('/api/ytmp3', async (req, res) => {
-    const videoId = extractVideoId(req.query.url);
-    if (!videoId) return res.status(400).send("Invalid YouTube URL");
-    console.log(`[TURBO-Y2] Speed-Optimized MP3: ${videoId}`);
-    const link = await getHybridMp3(videoId);
-    if (link) return res.redirect(link);
-    res.status(500).send("Y2Mate Turbo Fallback failed.");
+    link ? res.redirect(link) : res.status(500).send("Failed to convert.");
 });
 
 app.get('/api/ytmp4', async (req, res) => {
     const videoId = extractVideoId(req.query.url);
-    if (!videoId) return res.status(400).send("Invalid YouTube URL");
-
-    console.log(`[VIDEO] 360p Optimization: ${videoId}`);
+    if (!videoId) return res.status(400).send("Invalid URL");
     const link = await y2DownConvert(videoId, '360');
-    if (link) return res.redirect(link);
-    res.status(500).send(`360p Video Engine failed.`);
+    link ? res.redirect(link) : res.status(500).send("Failed to convert video.");
 });
 
-// Admin/System Endpoints
-app.get('/api/init', async (req, res) => {
-    try {
-        const data = await callY2MateApi('/ajax/download.php', { copyright: 0, format: req.query.format, url: req.query.url });
-        res.json(data);
-    } catch (e) { res.status(500).json({ error: e.message }); }
+// Koyeb එකට අවශ්‍ය අතිශය වැදගත් කොටස (0.0.0.0 බන්ධනය)
+app.listen(port, "0.0.0.0", () => {
+    console.log(`Server is live on port ${port}`);
 });
-
-app.get('/api/progress', async (req, res) => {
-    try {
-        const data = await callY2MateApi('/api/progress', { id: req.query.id });
-        res.json(data);
-    } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-app.listen(port, () => {
-    console.log(`[ANTIGRAVITY] V8.0 Turbo Live on ${port}`);
-});
-
-module.exports = app;
