@@ -3,13 +3,23 @@ const axios = require('axios');
 const cors = require('cors');
 
 const app = express();
-// Koyeb වැනි සේවාවන් සඳහා PORT එක dynamic විය යුතුය
 const port = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
 
-// --- Global Config & Session ---
+// --- YT Search Function (අලුතින් එකතු කළා) ---
+async function searchYouTube(query) {
+    try {
+        const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
+        const { data } = await axios.get(searchUrl, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }
+        });
+        const match = data.match(/"videoId":"([^"]{11})"/);
+        return match ? match[1] : null;
+    } catch (e) { return null; }
+}
+
 const CONFIG = {
     YTMP3_AS: {
         BASE: 'https://app.ytmp3.as/',
@@ -46,7 +56,6 @@ let activeSession = {
     lastUpdate: 0
 };
 
-// --- Helpers ---
 function extractVideoId(url) {
     if (!url) return null;
     const match = url.match(/(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/|youtube\.com\/shorts\/)([^"&?\/\s]{11})/);
@@ -89,7 +98,6 @@ async function refreshYtmp3Session() {
     }
 }
 
-// --- Providers (Cnv.cx, Y2Down, YTMP3.as, YtMp3.gg) ---
 async function cnvConvert(videoId) {
     try {
         const url = `https://www.youtube.com/watch?v=${videoId}`;
@@ -147,32 +155,33 @@ async function ytmp3ggConvert(videoId) {
     } catch (e) { return null; }
 }
 
-// --- Hybrid Speed Core ---
 async function getHybridMp3(videoId) {
-    const link = await cnvConvert(videoId) || await ytmp3ggConvert(videoId) || await ytmp3asConvert(videoId) || await y2DownConvert(videoId, 'mp3');
-    return link;
+    return await cnvConvert(videoId) || await ytmp3ggConvert(videoId) || await ytmp3asConvert(videoId) || await y2DownConvert(videoId, 'mp3');
 }
 
 // --- Endpoints ---
 app.get('/', (req, res) => {
-    res.send(`<h1>Antigravity API is Running</h1><p>Use /api/song?url=YOUR_URL</p>`);
+    res.send(`<h1>Antigravity API is Running</h1>`);
 });
 
+// Bot එකේ ඉල්ලීම (Request) හසුරුවන කොටස
 app.get('/api/song', async (req, res) => {
-    const videoId = extractVideoId(req.query.url);
-    if (!videoId) return res.status(400).send("Invalid URL");
+    let query = req.query.url;
+    if (!query) return res.status(400).send("Input required.");
+
+    let videoId = extractVideoId(query);
+    
+    // නමක් දුන්නොත් එය Search කරන්න
+    if (!videoId) {
+        videoId = await searchYouTube(query);
+    }
+
+    if (!videoId) return res.status(404).send("Song not found.");
+
     const link = await getHybridMp3(videoId);
-    link ? res.redirect(link) : res.status(500).send("Failed to convert.");
+    link ? res.redirect(link) : res.status(500).send("Conversion failed.");
 });
 
-app.get('/api/ytmp4', async (req, res) => {
-    const videoId = extractVideoId(req.query.url);
-    if (!videoId) return res.status(400).send("Invalid URL");
-    const link = await y2DownConvert(videoId, '360');
-    link ? res.redirect(link) : res.status(500).send("Failed to convert video.");
-});
-
-// Koyeb එකට අවශ්‍ය අතිශය වැදගත් කොටස (0.0.0.0 බන්ධනය)
 app.listen(port, "0.0.0.0", () => {
     console.log(`Server is live on port ${port}`);
 });
